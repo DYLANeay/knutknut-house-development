@@ -49,19 +49,20 @@ def clean_house(h, median_year):
     h["color"] = {"reds": "red"}.get(h["color"], h["color"])
     h["kitchens"] = int(h["kitchens"])                     # mix of 1 / 1.0 / 2.0
 
-    # remodeled = -1 means "never": split into a yes/no flag + how long ago
-    h["was_remodeled"] = int(h["remodeled"] != -1)
+    # remodeled = -1 (or None from the dashboard) means "never": split into a yes/no flag + how long ago
+    h["was_remodeled"] = int(h.get("remodeled") not in (-1, None))
     h["years_since_remodel"] = REF_YEAR - h["remodeled"] if h["was_remodeled"] else 0
     h["age"] = REF_YEAR - h["year"]
 
-    # joins: school and district info, agent name
+    # joins: the school gives the district (always consistent in the data), agent is optional
     school = SCHOOLS[h["school_id"]]
+    h["district_id"] = school["district_id"]
     district = DISTRICTS[h["district_id"]]
     h["school_rating"] = school["rating"]
     h["school_capacity"] = school["capacity"]
     h["crime_rating"] = district["crime_rating"]
     h["public_transport_rating"] = district["public_transport_rating"]
-    h["agent_name"] = AGENTS[h["agent_id"]]
+    h["agent_name"] = AGENTS.get(h.get("agent_id"))
     return h
 
 
@@ -83,6 +84,29 @@ FEATURE_NAMES = (NUMERIC + ["fireplace", "parking"]
                  + ["ad_" + a for a in ADVERTISEMENTS[1:]]
                  + ["color_" + c for c in COLORS[1:]]
                  + ["district_" + str(i) for i in range(1, len(DISTRICT_IDS))])
+
+
+# what the dashboard form must collect: the raw houses.jsonl keys that encode_house needs
+NUMBER_INPUTS = ["size", "lot_w", "sun_factor", "bathrooms", "kitchens", "condition_rating",
+                 "storage_rating", "external_storage_m2", "year", "remodeled"]
+CHOICE_INPUTS = {"fireplace": ["no", "yes"], "parking": ["no", "yes"],
+                 "advertisement": ADVERTISEMENTS, "color": COLORS, "school_id": list(SCHOOLS)}
+
+
+def dashboard_inputs():
+    """Each form field -> its range in the data (numbers) or its allowed values (choices), plus a default.
+
+    remodeled: range of real remodel years; send -1 or None for "never remodeled".
+    school_id: show SCHOOLS[id] (rating, district) as the label; the district follows from the school.
+    """
+    rows, _ = load_clean_rows()
+    spec = {}
+    for k in NUMBER_INPUTS:
+        vals = [h[k] for h in rows if k != "remodeled" or h[k] != -1]
+        spec[k] = {"min": min(vals), "max": max(vals), "default": float(np.median(vals))}
+    for k, choices in CHOICE_INPUTS.items():
+        spec[k] = {"choices": choices, "default": choices[0]}
+    return spec
 
 
 def _one_hot(value, categories):
@@ -140,7 +164,15 @@ if __name__ == "__main__":
     assert all("rooms" not in h and h["color"] != "reds" for h in rows)
     raw = _read_jsonl("houses.jsonl")[0]
     assert np.allclose(encode_house(raw, stats), X[0])   # dashboard encoding == training encoding
+    spec = dashboard_inputs()
+    form = {k: v["default"] for k, v in spec.items()}    # a form with only the listed fields must encode
+    assert encode_house(form, stats).shape == (len(FEATURE_NAMES),)
+    assert np.allclose(encode_house({**form, "remodeled": None}, stats),
+                       encode_house({**form, "remodeled": -1}, stats))
 
     print(f"{len(rows)} houses, {X.shape[1]} features, median year used for missing = {median_year}")
     print(f"price: min {y.min():,.0f}  median {np.median(y):,.0f}  max {y.max():,.0f} NOK")
     print("features:", ", ".join(FEATURE_NAMES))
+    print("\ndashboard inputs:")
+    for k, v in spec.items():
+        print(f"  {k:20} {v}")

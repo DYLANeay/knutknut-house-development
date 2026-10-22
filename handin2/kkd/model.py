@@ -55,3 +55,39 @@ def load_model(filename):
     # load the model from a file
     data = np.load(filename)
     return data["weights"], data["bias"]
+
+
+if __name__ == "__main__":
+    from kkd_data import load_dataset, train_test_split
+
+    # load the cleaned data from kkd_data.py
+    houses, prices, stats = load_dataset()
+    prices = prices / 1e6  # prices in millions of NOK, keeps the numbers small for SGD
+
+    # 90% to train, 10% to test
+    houses_train, houses_test, prices_train, prices_test = train_test_split(
+        houses, prices, test_frac=0.1
+    )
+
+    # train, starting from zero
+    weights, bias = train_sgd(
+        np.zeros(houses.shape[1]),
+        0.0,
+        houses_train,
+        prices_train,
+        learning_rate=0.001,
+        epochs=30,
+    )
+
+    # evaluate on houses the model has never seen
+    predictions = predict(houses_test, weights, bias)
+    print("mae (millions NOK)", mae(prices_test, predictions))
+    print("r2", r2(prices_test, predictions))
+
+    # the key drivers: biggest weights first
+    for name, weight in sorted(
+        zip(stats["feature_names"], weights), key=lambda t: -abs(t[1])
+    ):
+        print(name, round(weight, 2))
+
+    save_model(weights, bias, "model.npz")

@@ -34,8 +34,8 @@ def get_trained_model():
     if os.path.exists(MODEL_FILE):
         try:
             data = np.load(MODEL_FILE, allow_pickle=True)
-            w = data["w"]
-            b = float(data["b"])
+            w = data["weights"]
+            b = float(data["bias"])
             scale_type = str(data["scale_type"]) if "scale_type" in data else "million"
             y_scale = float(data["y_scale"]) if "y_scale" in data else 1e6
             r2 = float(data["r2"]) if "r2" in data else None

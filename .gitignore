@@ -1,2 +1,4 @@
 handin2/explanations/*
 handin2/cours-prep.md
+.~lock*
+__pycache__/

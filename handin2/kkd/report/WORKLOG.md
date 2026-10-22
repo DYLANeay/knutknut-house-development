@@ -117,5 +117,6 @@ and ad type. The price goes up with size (50 m² gives 3.6 M, 400 m² gives 25.4
 cd handin2/kkd
 ../.venv/bin/python kkd_data.py        # checks the data
 ../.venv/bin/python model.py           # trains, prints the results and saves model.npz
+../.venv/bin/python report/plot_weights.py   # makes report/key_drivers.png
 ../.venv/bin/python kkd_dashboard.py   # then go to http://127.0.0.1:8050
 ```

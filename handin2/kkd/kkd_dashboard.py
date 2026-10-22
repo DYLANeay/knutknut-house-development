@@ -19,14 +19,44 @@ from kkd_data import (
     AGENTS,
     COLORS,
     ADVERTISEMENTS,
-    REF_YEAR
+    REF_YEAR,
+    load_clean_rows
 )
 
 # Load dataset stats (kept in backend for the model inference function)
 _, _, STATS = load_dataset()
 
+# min / max of each input in the training data: outside of these the model is guessing
+_ROWS, _ = load_clean_rows()
+DATA_RANGES = {
+    key: (min(h[key] for h in _ROWS), max(h[key] for h in _ROWS))
+    for key in ["year", "size", "lot_w", "bathrooms", "kitchens", "external_storage_m2", "storage_rating"]
+}
+_REMODEL_YEARS = [h["remodeled"] for h in _ROWS if h["remodeled"] != -1]
+DATA_RANGES["remodeled"] = (min(_REMODEL_YEARS), max(_REMODEL_YEARS))
+RANGE_LABELS = {
+    "year": "construction year", "size": "living size", "lot_w": "lot width", "bathrooms": "bathrooms",
+    "kitchens": "kitchens", "external_storage_m2": "external storage", "storage_rating": "storage rating",
+    "remodeled": "remodel year",
+}
+
+
+def unusual_inputs(params):
+    """Names of the inputs that are outside what the model saw during training."""
+    unusual = []
+    for key, (low, high) in DATA_RANGES.items():
+        value = params[key]
+        if key == "remodeled" and value == -1:
+            continue
+        if not low <= value <= high:
+            unusual.append(f"{RANGE_LABELS[key]} ({low:g} to {high:g} in our data)")
+    return unusual
+
 # Model file path
 MODEL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model.npz")
+
+# below this size the linear model can give a negative price, so the dashboard does not allow it
+MIN_SIZE = 40
 
 
 def get_trained_model():
@@ -234,12 +264,14 @@ app.layout = html.Div(
                                 style=GRID_2COL,
                                 children=[
                                     html.Div([
-                                        html.Label("Construction Year:", style=LABEL_STYLE),
-                                        dcc.Input(id="input-year", type="number", value=1990, min=1900, max=REF_YEAR, style=INPUT_STYLE)
+                                        html.Label(f"Construction Year (1900 to {REF_YEAR}):", style=LABEL_STYLE),
+                                        dcc.Input(id="input-year", type="number", value=1990, style=INPUT_STYLE),
+                                        html.Div(id="year-warning", style={"color": "#dc2626", "fontSize": "12px", "marginTop": "4px"})
                                     ]),
                                     html.Div([
-                                        html.Label("Living Size (m²):", style=LABEL_STYLE),
-                                        dcc.Input(id="input-size", type="number", value=95, min=15, max=600, style=INPUT_STYLE)
+                                        html.Label(f"Living Size (m², min {MIN_SIZE}):", style=LABEL_STYLE),
+                                        dcc.Input(id="input-size", type="number", value=95, style=INPUT_STYLE),
+                                        html.Div(id="size-warning", style={"color": "#dc2626", "fontSize": "12px", "marginTop": "4px"})
                                     ])
                                 ]
                             ),
@@ -281,8 +313,9 @@ app.layout = html.Div(
                                         )
                                     ]),
                                     html.Div([
-                                        html.Label("Remodel Year:", style=LABEL_STYLE),
-                                        dcc.Input(id="input-remodeled-year", type="number", value=2015, min=1950, max=REF_YEAR, style=INPUT_STYLE)
+                                        html.Label("Remodel Year (after construction):", style=LABEL_STYLE),
+                                        dcc.Input(id="input-remodeled-year", type="number", value=2015, style=INPUT_STYLE),
+                                        html.Div(id="remodel-warning", style={"color": "#dc2626", "fontSize": "12px", "marginTop": "4px"})
                                     ])
                                 ]
                             ),
@@ -358,7 +391,7 @@ app.layout = html.Div(
                                 children=[
                                     html.Div([
                                         html.Label(id="label-storage", children="Storage Rating: 6 / 10", style=LABEL_STYLE),
-                                        dcc.Slider(id="input-storage", min=1, max=10, step=1, value=6, marks={i: str(i) for i in range(1, 11)})
+                                        dcc.Slider(id="input-storage", min=0, max=10, step=1, value=6, marks={i: str(i) for i in range(0, 11)})
                                     ])
                                 ]
                             ),
@@ -416,7 +449,9 @@ app.layout = html.Div(
                                 id="model-metrics-display",
                                 style={"fontSize": "14px", "opacity": "0.9"},
                                 children="Click 'Look for a house' to run valuation"
-                            )
+                            ),
+                            # non-blocking warning when the house is unlike the ones in the data
+                            html.Div(id="range-warning")
                         ]
                     ),
 
@@ -472,6 +507,38 @@ def toggle_remodel_input(was_remodeled):
     return was_remodeled == "no"
 
 
+# Explain why the size field turns red
+@app.callback(
+    Output("size-warning", "children"),
+    Input("input-size", "value")
+)
+def warn_small_size(size):
+    if size is not None and size < MIN_SIZE:
+        return f"Houses under {MIN_SIZE} m² are too small for the model, the price is computed for {MIN_SIZE} m²."
+    return ""
+
+
+# Explain why a year is not accepted
+@app.callback(
+    Output("year-warning", "children"),
+    Output("remodel-warning", "children"),
+    Input("input-year", "value"),
+    Input("input-remodeled-year", "value"),
+    Input("input-was-remodeled", "value")
+)
+def warn_years(year, remodeled_year, was_remodeled):
+    year_msg = ""
+    if year is not None and not 1900 <= year <= REF_YEAR:
+        year_msg = f"The construction year must be between 1900 and {REF_YEAR}."
+    remodel_msg = ""
+    if was_remodeled == "yes" and year is not None and remodeled_year is not None:
+        if remodeled_year < year:
+            remodel_msg = f"A house can't be remodeled before it was built, the price is computed for {year}."
+        elif remodeled_year > REF_YEAR:
+            remodel_msg = f"The remodel year can't be after {REF_YEAR}, the price is computed for {REF_YEAR}."
+    return year_msg, remodel_msg
+
+
 # Callback 3: Update Slider Text Labels
 @app.callback(
     Output("label-condition", "children"),
@@ -495,6 +562,7 @@ def update_slider_labels(cond, stor, sun):
     Output("model-status-badge", "children"),
     Output("model-metrics-display", "children"),
     Output("selected-summary-display", "children"),
+    Output("range-warning", "children"),
     Input("btn-look-house", "n_clicks"),
     State("input-district", "value"),
     State("input-school", "value"),
@@ -521,13 +589,14 @@ def compute_dashboard_state(
     color, ad_tier, condition, storage, sun
 ):
     # Guard against initial None inputs
-    year = int(year or 1990)
-    size = float(size or 95)
+    year = min(max(int(year or 1990), 1900), REF_YEAR)
+    size = max(float(size or 95), MIN_SIZE)
     lot_w = float(lot_w or 35)
     bathrooms = int(bathrooms or 2)
     kitchens = int(kitchens or 1)
     ext_storage = float(ext_storage or 0)
-    remodeled_val = int(remodeled_year or 2015) if was_remodeled == "yes" else -1
+    # remodel year can't be before the construction year
+    remodeled_val = min(max(int(remodeled_year or 2015), year), REF_YEAR) if was_remodeled == "yes" else -1
 
     if not school_id:
         district_schools = [s["id"] for s in SCHOOLS.values() if s["district_id"] == district_id]
@@ -575,7 +644,21 @@ def compute_dashboard_state(
         html.Div([html.Span("Condition: ", style={"color": "#64748b", "fontSize": "13px"}), html.Strong(f"{condition} / 10")]),
     ]
 
-    return price_text, status_badge, metrics_text, summary_items
+    unusual = unusual_inputs(chosen_params)
+    warning = ""
+    if unusual:
+        warning = html.Div(
+            style={"marginTop": "15px", "padding": "10px 12px", "borderRadius": "8px", "fontSize": "13px",
+                   "backgroundColor": "#fef3c7", "color": "#92400e"},
+            children=[
+                html.Strong("⚠️ Unusual house: "),
+                "some values are outside what we have in our data, so this price is less reliable. ",
+                html.Br(),
+                "Check: " + ", ".join(unusual) + ".",
+            ]
+        )
+
+    return price_text, status_badge, metrics_text, summary_items, warning
 
 
 if __name__ == "__main__":
